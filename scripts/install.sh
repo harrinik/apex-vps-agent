@@ -484,32 +484,44 @@ DCAUTH
 
   cat > /etc/dovecot/conf.d/10-master.conf <<'DCMASTER'
 service imap-login {
-  inet_listener imap  { port = 143 }
-  inet_listener imaps { port = 993; ssl = yes }
+  inet_listener imap {
+    port = 143
+  }
+  inet_listener imaps {
+    port = 993
+    ssl = yes
+  }
 }
 service pop3-login {
-  inet_listener pop3  { port = 110 }
-  inet_listener pop3s { port = 995; ssl = yes }
+  inet_listener pop3 {
+    port = 110
+  }
+  inet_listener pop3s {
+    port = 995
+    ssl = yes
+  }
 }
 service lmtp {
   unix_listener /var/spool/postfix/private/dovecot-lmtp {
-    mode  = 0600
-    user  = postfix
+    mode = 0600
+    user = postfix
     group = postfix
   }
 }
 service auth {
   unix_listener /var/spool/postfix/private/auth {
-    mode  = 0666
-    user  = postfix
+    mode = 0666
+    user = postfix
     group = postfix
   }
   unix_listener auth-userdb {
-    mode  = 0600
-    user  = vmail
+    mode = 0600
+    user = vmail
   }
 }
-service auth-worker { user = vmail }
+service auth-worker {
+  user = vmail
+}
 DCMASTER
   strip_crlf /etc/dovecot/conf.d/10-master.conf
 
