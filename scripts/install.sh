@@ -92,6 +92,9 @@ backup_file() {
   cp "$f" "$dest" 2>>"$LOG_FILE" && log "Backed up $f → $dest"
 }
 
+# ── Strip CRLF from a file (safe when script itself was cloned on Windows) ────
+strip_crlf() { sed -i 's/\r//' "$1" 2>/dev/null || true; }
+
 # ── Port listening check ───────────────────────────────────────────────────────
 port_listening() {
   ss -tlnp 2>/dev/null | grep -q ":${1} " || \
@@ -413,6 +416,7 @@ smtpd_error_sleep_time              = 1s
 smtpd_soft_error_limit              = 10
 smtpd_hard_error_limit              = 20
 PFEOF
+  strip_crlf /etc/postfix/main.cf
 
   # Add submission (587) and smtps (465) services to master.cf
   backup_file /etc/postfix/master.cf
@@ -476,6 +480,7 @@ userdb {
   args   = uid=vmail gid=vmail home=/var/mail/vhosts/%d/%n
 }
 DCAUTH
+  strip_crlf /etc/dovecot/conf.d/10-auth.conf
 
   cat > /etc/dovecot/conf.d/10-master.conf <<'DCMASTER'
 service imap-login {
@@ -506,6 +511,7 @@ service auth {
 }
 service auth-worker { user = vmail }
 DCMASTER
+  strip_crlf /etc/dovecot/conf.d/10-master.conf
 
   cat > /etc/dovecot/conf.d/10-ssl.conf <<DCSSL
 ssl           = required
@@ -514,6 +520,7 @@ ssl_key       = <${CERT_DIR}/privkey.pem
 ssl_min_protocol = TLSv1.2
 ssl_cipher_list  = EECDH+AESGCM:EDH+AESGCM:AES256+EECDH:AES256+EDH
 DCSSL
+  strip_crlf /etc/dovecot/conf.d/10-ssl.conf
 
   cat > /etc/dovecot/conf.d/10-mail.conf <<'DCMAIL'
 mail_location = maildir:/var/mail/vhosts/%d/%n/Maildir
@@ -522,6 +529,7 @@ namespace inbox {
   inbox = yes
 }
 DCMAIL
+  strip_crlf /etc/dovecot/conf.d/10-mail.conf
 
   # Master user password
   if command -v doveadm &>/dev/null; then
@@ -570,6 +578,7 @@ SignatureAlgorithm      rsa-sha256
 UserID                  opendkim:opendkim
 Socket                  local:/var/spool/postfix/opendkim/opendkim.sock
 DKIMCONF
+  strip_crlf /etc/opendkim.conf
 
   chown opendkim:postfix /var/spool/postfix/opendkim
   chmod 750 /var/spool/postfix/opendkim
