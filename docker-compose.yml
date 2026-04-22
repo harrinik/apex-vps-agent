@@ -1,0 +1,27 @@
+﻿version: '3.8'
+
+services:
+  vps-agent:
+    build: .
+    container_name: apex-vps-agent
+    restart: unless-stopped
+    network_mode: host   # Required to communicate with local Postfix/Dovecot
+    volumes:
+      - /etc/postfix:/etc/postfix
+      - /etc/dovecot:/etc/dovecot
+      - /etc/opendkim:/etc/opendkim
+      - /var/mail:/var/mail
+      - /var/log/apex-vps-agent:/var/log/apex-vps-agent
+    env_file:
+      - .env
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3001/health/live"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
