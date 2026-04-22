@@ -738,11 +738,15 @@ if ! skip_if_done "agent_built"; then
   log "Agent dir: $AGENT_DIR"
   cd "$AGENT_DIR"
 
-  log "Installing npm dependencies…"
-  retry npm ci --omit=dev 2>>"$LOG_FILE"
+  log "Installing all npm dependencies (including devDeps for TypeScript build)…"
+  retry npm ci 2>>"$LOG_FILE"
 
   log "Building TypeScript…"
-  npm run build 2>>"$LOG_FILE"
+  npm run build 2>&1 | tee -a "$LOG_FILE"
+  [[ "${PIPESTATUS[0]}" -ne 0 ]] && die "TypeScript build failed — check $LOG_FILE"
+
+  log "Pruning devDependencies from production install…"
+  npm prune --omit=dev 2>>"$LOG_FILE"
 
   success "Agent built: $AGENT_DIR/dist/index.js"
   mark_done "agent_built"
