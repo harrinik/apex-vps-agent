@@ -920,14 +920,59 @@ if ! skip_if_done "nginx_configured"; then
 
   if [ ! -d "$CERT_DIR" ]; then
     log "Requesting Let's Encrypt certificate for $VIRUS_HOST…"
-    certbot certonly --standalone -d "$VIRUS_HOST" --email "$CERT_EMAIL" --agree-tos --non-interactive 2>>"$LOG_FILE"
-    success "Let's Encrypt certificate obtained for $VIRUS_HOST"
+    # Stop Nginx temporarily for standalone certbot
+    svc_stop nginx 2>/dev/null || true
+    certbot certonly --standalone -d "$VIRUS_HOST" --email "$CERT_EMAIL" --agree-tos --non-interactive 2>>"$LOG_FILE" || {
+      warn "Failed to obtain SSL certificate for $VIRUS_HOST - DNS may not be configured yet"
+      warn "You can run: certbot certonly --standalone -d $VIRUS_HOST later"
+      SKIP_SSL=true
+    }
+    svc_start nginx 2>/dev/null || true
+    if [ "$SKIP_SSL" != "true" ]; then
+      success "Let's Encrypt certificate obtained for $VIRUS_HOST"
+    fi
   else
     success "SSL certificate already exists for $VIRUS_HOST"
   fi
 
   # Configure Nginx for virus scanner API
-  cat > /etc/nginx/sites-available/virus-scanner <<'NGINX'
+  if [ "$SKIP_SSL" = "true" ]; then
+    # HTTP-only config (no SSL yet)
+    cat > /etc/nginx/sites-available/virus-scanner <<'NGINX'
+# Apex Mail Cloud - Virus Scanner API (HTTP only - no SSL yet)
+server {
+    listen 80;
+    server_name virus-scanner.apexcloudconsole.com;
+
+    # Proxy to vps-agent API
+    location / {
+        proxy_pass http://127.0.0.1:3001/api/scan;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_cache_bypass $http_upgrade;
+
+        # Increase timeouts for large file scans
+        proxy_connect_timeout 300s;
+        proxy_send_timeout 300s;
+        proxy_read_timeout 300s;
+    }
+
+    # Health check endpoint
+    location /health {
+        proxy_pass http://127.0.0.1:3001/api/scan/health;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+    }
+}
+NGINX
+  else
+    # Full HTTPS config
+    cat > /etc/nginx/sites-available/virus-scanner <<'NGINX'
 # Apex Mail Cloud - Virus Scanner API
 server {
     listen 80;
@@ -971,6 +1016,7 @@ server {
     }
 }
 NGINX
+  fi
   strip_crlf /etc/nginx/sites-available/virus-scanner
 
   # Enable site
