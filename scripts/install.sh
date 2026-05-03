@@ -362,7 +362,7 @@ if ! skip_if_done "postfix_configured"; then
 myhostname = $HOSTNAME
 mydomain   = $DOMAIN
 myorigin   = /etc/mailname
-mydestination = localhost
+mydestination = localhost, $DOMAIN
 relayhost =
 mynetworks = 127.0.0.0/8 [::ffff:127.0.0.0]/104 [::1]/128
 mailbox_size_limit = 0
@@ -412,14 +412,53 @@ virtual_transport       = lmtp:unix:private/dovecot-lmtp
 # No OpenDKIM milter needed - AWS SES signs outgoing emails
 # VPS only handles incoming mail reception
 
+# ── RSPAMD Milter (Spam Filtering) ───────────────────────────────────────────
+smtpd_milters = inet:localhost:11332
+non_smtpd_milters = $smtpd_milters
+milter_default_action = accept
+milter_protocol = 6
+milter_connect_timeout = 30s
+milter_command_timeout = 30s
+milter_content_timeout = 300s
+milter_data_timeout = 30s
+
 # ── Rate limiting & anti-spam ─────────────────────────────────────────────────
 smtpd_client_connection_count_limit = 50
 smtpd_client_connection_rate_limit  = 60
 smtpd_error_sleep_time              = 1s
 smtpd_soft_error_limit              = 10
 smtpd_hard_error_limit              = 20
+
+# ── Detailed Logging for Abuse Control ───────────────────────────────────────
+smtpd_data_restrictions = reject_unauth_pipelining, permit
+smtpd_recipient_limit = 1000
+smtpd_sender_restrictions = permit_mynetworks, permit_sasl_authenticated, reject_non_fqdn_sender, reject_sender_login_mismatch
+
+# Log all headers for abuse control
+smtpd_delay_reject = yes
+disable_vrfy_command = yes
+smtpd_helo_required = yes
+smtpd_helo_restrictions = permit_mynetworks, permit_sasl_authenticated, reject_invalid_helo_hostname, reject_non_fqdn_helo_hostname
+
+# Log message ID, client IP, size, and all headers
+header_checks = pcre:/etc/postfix/header_checks.pcre
+body_checks = pcre:/etc/postfix/body_checks.pcre
 PFEOF
   strip_crlf /etc/postfix/main.cf
+
+  # Create header_checks for logging
+  cat > /etc/postfix/header_checks.pcre <<'HEADER'
+# Log all headers for abuse control
+/^(From|To|Cc|Bcc|Subject|Message-ID|Date|X-Spam-|X-Virus-|Received|Return-Path):/ WARN
+HEADER
+  strip_crlf /etc/postfix/header_checks.pcre
+
+  # Create body_checks for logging
+  cat > /etc/postfix/body_checks.pcre <<'BODY'
+# Log suspicious patterns in body
+/^(http|https):/ WARN
+BODY
+  strip_crlf /etc/postfix/body_checks.pcre
 
   # Add submission (587) and smtps (465) services to master.cf
   backup_file /etc/postfix/master.cf
@@ -537,6 +576,39 @@ ssl_cipher_list  = EECDH+AESGCM:EDH+AESGCM:AES256+EECDH:AES256+EDH
 DCSSL
   strip_crlf /etc/dovecot/conf.d/10-ssl.conf
 
+  # Enable Sieve plugin for spam filtering
+  cat > /etc/dovecot/conf.d/90-sieve.conf <<SIEVE
+plugin {
+  sieve = /var/mail/vhosts/%d/%n/.dovecot.sieve
+  sieve_dir = /var/mail/vhosts/%d/%n/sieve
+  sieve_global_dir = /var/mail/vhosts/sieve
+  sieve_global_path = /var/mail/vhosts/sieve/default.sieve
+}
+SIEVE
+  strip_crlf /etc/dovecot/conf.d/90-sieve.conf
+
+  # Create global sieve script for spam folder
+  mkdir -p /var/mail/vhosts/sieve
+  cat > /var/mail/vhosts/sieve/default.sieve <<'SIEVE_SCRIPT'
+require ["fileinto", "imapflags"];
+
+# Move spam to Spam folder
+if header :contains "X-Spam-Flag" "YES" {
+  fileinto "Spam";
+  stop;
+}
+
+# Move messages with ***SPAM*** in subject
+if header :contains "Subject" "***SPAM***" {
+  fileinto "Spam";
+  stop;
+}
+SIEVE_SCRIPT
+
+  # Compile sieve script
+  sievec /var/mail/vhosts/sieve/default.sieve /var/mail/vhosts/sieve/default.svbin 2>>"$LOG_FILE" || true
+  chown -R vmail:vmail /var/mail/vhosts/sieve
+
   cat > /etc/dovecot/conf.d/10-mail.conf <<'DCMAIL'
 mail_location = maildir:/var/mail/vhosts/%d/%n/Maildir
 mail_privileged_group = vmail
@@ -622,7 +694,130 @@ CLAMD
 fi
 
 # ==============================================================================
-# 11. Fail2Ban — basic protection
+# 11. Redis — for RSPAMD learning
+# ==============================================================================
+step "Redis installation"
+if ! skip_if_done "redis_configured"; then
+  log "Installing Redis for RSPAMD learning..."
+  retry apt-get install -y redis-server 2>>"$LOG_FILE"
+
+  # Configure Redis
+  backup_file /etc/redis/redis.conf
+  cat > /etc/redis/redis.conf <<'REDIS'
+# Apex Mail Cloud - Redis Configuration
+bind 127.0.0.1
+port 6379
+daemonize yes
+pidfile /var/run/redis/redis-server.pid
+logfile /var/log/redis/redis.log
+databases 16
+save 900 1
+save 300 10
+save 60 10000
+maxmemory 256mb
+maxmemory-policy allkeys-lru
+REDIS
+  strip_crlf /etc/redis/redis.conf
+
+  svc_start redis-server
+  svc_enable redis-server
+
+  success "Redis installed and running"
+  mark_done "redis_configured"
+fi
+
+# ==============================================================================
+# 12. RSPAMD — Spam Filtering
+# ==============================================================================
+step "RSPAMD installation"
+if ! skip_if_done "rspamd_configured"; then
+  log "Installing RSPAMD for spam filtering..."
+  retry apt-get install -y rspamd redis-tools 2>>"$LOG_FILE"
+
+  # Configure RSPAMD
+  backup_file /etc/rspamd/rspamd.conf
+  cat > /etc/rspamd/rspamd.conf <<'RSPAMD'
+# Apex Mail Cloud - RSPAMD Configuration
+worker {
+    count = 4;
+    max_tasks = 1000;
+}
+
+options {
+    pidfile = "/var/run/rspamd/rspamd.pid";
+    grpc {
+        enabled = true;
+    }
+    redis {
+        servers = "127.0.0.1:6379";
+        dbname = 0;
+        timeout = 1s;
+        expand_keys = true;
+    }
+}
+
+logging {
+    type = "syslog";
+    level = "info";
+    debug = false;
+}
+
+# Redis for statistics and learning
+redis {
+    servers = "127.0.0.1:6379";
+    dbname = 0;
+}
+
+# Spam learning
+classifier "bayes" {
+    backend = "redis";
+    servers = "127.0.0.1:6379";
+    dbname = 1;
+    autolearn = true;
+}
+RSPAMD
+  strip_crlf /etc/rspamd/rspamd.conf
+
+  # Configure actions
+  backup_file /etc/rspamd/actions.conf
+  cat > /etc/rspamd/actions.conf <<'ACTIONS'
+# Apex Mail Cloud - RSPAMD Actions
+subject = "***SPAM*** %s";
+greylist = "4h:15m:30m";
+spam_action = "rewrite subject";
+reject_action = "reject";
+rewrite_subject = true;
+ACTIONS
+  strip_crlf /etc/rspamd/actions.conf
+
+  # Configure antivirus (ClamAV)
+  backup_file /etc/rspamd/antivirus.conf
+  cat > /etc/rspamd/antivirus.conf <<'AV'
+# Apex Mail Cloud - RSPAMD Antivirus
+clamav {
+    symbol = "CLAM_VIRUS";
+    type = "clamav";
+    servers = "/var/run/clamav/clamd.sock";
+    scan_mime_parts = true;
+    scan_size_mimes = 0;
+    scan_text_mime = false;
+    scan_image = false;
+}
+AV
+  strip_crlf /etc/rspamd/antivirus.conf
+
+  # Add rspamd user to clamav group
+  usermod -aG clamav rspamd 2>>"$LOG_FILE"
+
+  svc_start rspamd
+  svc_enable rspamd
+
+  success "RSPAMD installed and configured"
+  mark_done "rspamd_configured"
+fi
+
+# ==============================================================================
+# 13. Fail2Ban — basic protection
 # ==============================================================================
 step "Fail2Ban"
 if ! skip_if_done "fail2ban_configured"; then

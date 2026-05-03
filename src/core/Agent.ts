@@ -4,6 +4,7 @@ import { SupabaseService, EmailAccountRow, DomainRow } from '../services/Supabas
 import { MailboxService } from '../services/MailboxService';
 import { DomainService } from '../services/DomainService';
 import { DkimService } from '../services/DkimService';
+import { EmailLogService } from '../services/EmailLogService';
 import { handleMailboxCreate, handleMailboxDelete, handleMailboxUpdatePassword } from '../workers/MailboxWorker';
 import { handleDomainAdd, handleDomainRemove } from '../workers/DomainWorker';
 import { handleDkimGenerate, handleDkimRotate } from '../workers/DkimWorker';
@@ -28,6 +29,7 @@ export class Agent {
   readonly mailboxService = new MailboxService();
   readonly domainService  = new DomainService();
   readonly dkimService    = new DkimService();
+  readonly emailLogService = new EmailLogService(new SupabaseService());
 
   async start(): Promise<void> {
     logger.info('[Agent] starting…');
@@ -44,6 +46,7 @@ export class Agent {
     logger.info('[Agent] stopping…');
     this.scheduler.stop();
     await this.queue.drain();
+    await this.emailLogService.shutdown();
     await this.supabase.disconnect();
     logger.info('[Agent] stopped cleanly');
   }
