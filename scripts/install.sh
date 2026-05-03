@@ -335,7 +335,12 @@ if ! skip_if_done "ssl_cert"; then
 
   # Set up auto-renewal cron (idempotent)
   if ! crontab -l 2>/dev/null | grep -q "certbot renew"; then
-    (crontab -l 2>/dev/null; echo "0 3 * * * certbot renew --quiet --post-hook 'systemctl reload postfix dovecot' >> /var/log/certbot-renew.log 2>&1") | crontab -
+    # Create temp file with cron job
+    TMP_CRON=$(mktemp)
+    crontab -l 2>/dev/null > "$TMP_CRON" || true
+    echo "0 3 * * * certbot renew --quiet --post-hook 'systemctl reload postfix dovecot' >> /var/log/certbot-renew.log 2>&1" >> "$TMP_CRON"
+    crontab "$TMP_CRON"
+    rm -f "$TMP_CRON"
     success "Certbot auto-renewal cron installed"
   fi
 
