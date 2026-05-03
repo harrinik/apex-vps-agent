@@ -580,7 +580,49 @@ log "Skipping DKIM key generation — AWS SES provides DKIM tokens via API"
 log "Add AWS SES DKIM CNAME records to DNS for outgoing email signing"
 
 # ==============================================================================
-# 10. Fail2Ban — basic protection
+# 10. ClamAV — Virus Scanner
+# ==============================================================================
+step "ClamAV installation"
+if ! skip_if_done "clamav_configured"; then
+  log "Installing ClamAV for virus scanning..."
+  retry apt-get install -y clamav clamav-daemon clamav-freshclam 2>>"$LOG_FILE"
+
+  # Configure clamd to listen on local socket (faster than clamscan)
+  backup_file /etc/clamav/clamd.conf
+  cat > /etc/clamav/clamd.conf <<'CLAMD'
+# Apex Mail Cloud - ClamAV Configuration
+LogFile /var/log/clamav/clamd.log
+LogTime yes
+LogSyslog yes
+PidFile /var/run/clamav/clamd.pid
+TemporaryDirectory /var/tmp
+DatabaseDirectory /var/lib/clamav
+LocalSocket /var/run/clamav/clamd.sock
+FixStaleSocket yes
+MaxThreads 50
+MaxQueue 100
+MaxFileSize 100M
+CLAMD
+  strip_crlf /etc/clamav/clamd.conf
+
+  # Update virus definitions
+  log "Updating ClamAV virus definitions..."
+  retry freshclam 2>>"$LOG_FILE"
+
+  # Start and enable services
+  svc_stop clamav-freshclam
+  svc_stop clamav-daemon
+  svc_start clamav-freshclam
+  svc_start clamav-daemon
+  svc_enable clamav-freshclam
+  svc_enable clamav-daemon
+
+  success "ClamAV installed and running"
+  mark_done "clamav_configured"
+fi
+
+# ==============================================================================
+# 11. Fail2Ban — basic protection
 # ==============================================================================
 step "Fail2Ban"
 if ! skip_if_done "fail2ban_configured"; then
@@ -645,7 +687,87 @@ if ! skip_if_done "ufw_configured"; then
 fi
 
 # ==============================================================================
-# 12. Node.js
+# 12. Nginx — virus-scanner.apexcloudconsole.com
+# ==============================================================================
+step "Nginx configuration"
+if ! skip_if_done "nginx_configured"; then
+  # Install Nginx
+  retry apt-get install -y nginx 2>>"$LOG_FILE"
+
+  # Get SSL certificate for virus-scanner subdomain
+  VIRUS_HOST="virus-scanner.apexcloudconsole.com"
+  CERT_DIR="/etc/letsencrypt/live/$VIRUS_HOST"
+
+  if [ ! -d "$CERT_DIR" ]; then
+    log "Requesting Let's Encrypt certificate for $VIRUS_HOST…"
+    certbot certonly --standalone -d "$VIRUS_HOST" --email "$CERT_EMAIL" --agree-tos --non-interactive 2>>"$LOG_FILE"
+    success "Let's Encrypt certificate obtained for $VIRUS_HOST"
+  else
+    success "SSL certificate already exists for $VIRUS_HOST"
+  fi
+
+  # Configure Nginx for virus scanner API
+  cat > /etc/nginx/sites-available/virus-scanner <<'NGINX'
+# Apex Mail Cloud - Virus Scanner API
+server {
+    listen 80;
+    server_name virus-scanner.apexcloudconsole.com;
+    return 301 https://$server_name$request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    server_name virus-scanner.apexcloudconsole.com;
+
+    ssl_certificate /etc/letsencrypt/live/virus-scanner.apexcloudconsole.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/virus-scanner.apexcloudconsole.com/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers HIGH:!aNULL:!MD5;
+    ssl_prefer_server_ciphers on;
+
+    # Proxy to vps-agent API
+    location / {
+        proxy_pass http://127.0.0.1:3001/api/scan;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_cache_bypass $http_upgrade;
+
+        # Increase timeouts for large file scans
+        proxy_connect_timeout 300s;
+        proxy_send_timeout 300s;
+        proxy_read_timeout 300s;
+    }
+
+    # Health check endpoint
+    location /health {
+        proxy_pass http://127.0.0.1:3001/api/scan/health;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+    }
+}
+NGINX
+  strip_crlf /etc/nginx/sites-available/virus-scanner
+
+  # Enable site
+  ln -sf /etc/nginx/sites-available/virus-scanner /etc/nginx/sites-enabled/
+  rm -f /etc/nginx/sites-enabled/default
+
+  # Test and reload Nginx
+  nginx -t 2>>"$LOG_FILE"
+  systemctl reload nginx 2>>"$LOG_FILE"
+  systemctl enable nginx 2>>"$LOG_FILE"
+
+  success "Nginx configured for virus-scanner.apexcloudconsole.com"
+  mark_done "nginx_configured"
+fi
+
+# ==============================================================================
+# 13. Node.js
 # ==============================================================================
 step "Node.js ${NODE_MAJOR}"
 if ! skip_if_done "nodejs_installed"; then

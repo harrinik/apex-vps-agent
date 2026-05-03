@@ -5,6 +5,7 @@ import { Agent } from '../core/Agent';
 import { createHealthRouter } from './routes/health';
 import { createMailboxRouter } from './routes/mailbox';
 import { createDomainRouter } from './routes/domain';
+import scanRouter from './routes/scan';
 import { logger } from '../utils/logger';
 import { config } from '../config';
 
@@ -35,6 +36,7 @@ export function createApiServer(agent: Agent) {
   app.use('/health',        createHealthRouter(agent));
   app.use('/api/mailboxes', createMailboxRouter(agent));
   app.use('/api/domains',   createDomainRouter(agent));
+  app.use('/api/scan',      scanRouter);
 
   // Root
   app.get('/', (_req, res) => res.json({ name: 'apex-vps-agent', version: '2.0.0' }));
