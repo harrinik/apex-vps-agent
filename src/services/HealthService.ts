@@ -1,5 +1,6 @@
 ﻿import { exec, commandExists } from '../utils/exec';
 import { config } from '../config';
+import { createClient } from '@supabase/supabase-js';
 
 export interface HealthStatus {
   status: 'healthy' | 'degraded' | 'unhealthy';
@@ -86,10 +87,9 @@ export class HealthService {
   private async checkSupabaseConnectivity(): Promise<CheckResult> {
     const t = Date.now();
     try {
-      const res = await fetch(`${config.SUPABASE_URL}/health`, {
-        signal: AbortSignal.timeout(5_000),
-      });
-      return { ok: res.ok, message: `HTTP ${res.status}`, durationMs: Date.now() - t };
+      const supabase = createClient(config.SUPABASE_URL, config.SUPABASE_SERVICE_KEY);
+      const { error } = await supabase.from('email_accounts').select('id').limit(1);
+      return { ok: !error, message: error ? error.message : 'connected', durationMs: Date.now() - t };
     } catch (err) {
       return { ok: false, message: (err as Error).message, durationMs: Date.now() - t };
     }
