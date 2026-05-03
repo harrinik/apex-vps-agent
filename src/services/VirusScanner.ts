@@ -1,6 +1,5 @@
 import { exec } from '../utils/exec';
 import { logger } from '../utils/logger';
-import { createHash } from 'crypto';
 
 export interface ScanResult {
   infected: boolean;
@@ -55,7 +54,7 @@ export class VirusScanner {
   /**
    * Scan a file from Supabase Storage (download to temp, scan, delete)
    */
-  async scanFromStorage(storagePath: string, filename: string): Promise<ScanResult> {
+  async scanFromStorage(_storagePath: string, _filename: string): Promise<ScanResult> {
     // This would be called by the API endpoint which downloads from Supabase first
     // The actual download happens in the API handler
     throw new Error('Use scanFile with local path - download happens in API handler');
