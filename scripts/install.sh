@@ -684,6 +684,10 @@ CLAMD
   # Start and enable services
   svc_stop clamav-freshclam
   svc_stop clamav-daemon
+
+  # Remove stale lock files
+  rm -f /var/run/clamav/freshclam.pid /var/run/clamav/clamd.pid /var/lock/subsys/clamav-freshclam 2>/dev/null || true
+
   svc_start clamav-freshclam
   svc_start clamav-daemon
   svc_enable clamav-freshclam
