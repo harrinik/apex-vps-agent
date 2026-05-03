@@ -403,11 +403,9 @@ virtual_uid_maps        = static:5000
 virtual_gid_maps        = static:5000
 virtual_transport       = lmtp:unix:private/dovecot-lmtp
 
-# ── DKIM (Milter) ─────────────────────────────────────────────────────────────
-milter_default_action = accept
-milter_protocol       = 6
-smtpd_milters         = local:opendkim/opendkim.sock
-non_smtpd_milters     = local:opendkim/opendkim.sock
+# ── DKIM (AWS SES handles DKIM for outgoing emails) ─────────────────────────
+# No OpenDKIM milter needed - AWS SES signs outgoing emails
+# VPS only handles incoming mail reception
 
 # ── Rate limiting & anti-spam ─────────────────────────────────────────────────
 smtpd_client_connection_count_limit = 50
@@ -563,95 +561,18 @@ DCMAIL
 fi
 
 # ==============================================================================
-# 8. OpenDKIM
+# 8. OpenDKIM (SKIPPED - AWS SES handles DKIM for outgoing emails)
 # ==============================================================================
-step "OpenDKIM configuration"
-if ! skip_if_done "opendkim_configured"; then
-  backup_file /etc/opendkim.conf
-
-  mkdir -p /etc/opendkim/keys
-  mkdir -p /var/spool/postfix/opendkim
-
-  cat > /etc/opendkim.conf <<'DKIMCONF'
-AutoRestart             Yes
-AutoRestartRate         10/1h
-UMask                   002
-Syslog                  yes
-SyslogSuccess           Yes
-LogWhy                  Yes
-Canonicalization        relaxed/simple
-ExternalIgnoreList      refile:/etc/opendkim/TrustedHosts
-InternalHosts           refile:/etc/opendkim/TrustedHosts
-KeyTable                refile:/etc/opendkim/KeyTable
-SigningTable            refile:/etc/opendkim/SigningTable
-Mode                    sv
-PidFile                 /var/run/opendkim/opendkim.pid
-SignatureAlgorithm      rsa-sha256
-UserID                  opendkim:opendkim
-Socket                  local:/var/spool/postfix/opendkim/opendkim.sock
-DKIMCONF
-  strip_crlf /etc/opendkim.conf
-
-  chown opendkim:postfix /var/spool/postfix/opendkim
-  chmod 750 /var/spool/postfix/opendkim
-
-  # Seed TrustedHosts
-  cat > /etc/opendkim/TrustedHosts <<TRUSTED
-127.0.0.1
-localhost
-$HOSTNAME
-$DOMAIN
-TRUSTED
-
-  touch /etc/opendkim/KeyTable
-  touch /etc/opendkim/SigningTable
-  chown -R opendkim:opendkim /etc/opendkim
-
-  success "OpenDKIM configured"
-  mark_done "opendkim_configured"
-fi
+log "Skipping OpenDKIM configuration — AWS SES handles DKIM signing for outgoing emails"
+log "VPS only handles incoming mail (Postfix/Dovecot)"
+mark_done "opendkim_configured"
+mark_done "dkim_keys_primary"
 
 # ==============================================================================
-# 9. DKIM Key Generation for Primary Domain
+# 9. DKIM Key Generation (SKIPPED - AWS SES handles DKIM)
 # ==============================================================================
-step "DKIM key generation for $DOMAIN"
-if ! skip_if_done "dkim_keys_primary"; then
-  KEY_DIR="/etc/opendkim/keys/$DOMAIN"
-  mkdir -p "$KEY_DIR"
-
-  # Use opendkim-genkey (preferred) or openssl fallback
-  if command -v opendkim-genkey &>/dev/null; then
-    opendkim-genkey -b 2048 -d "$DOMAIN" -s "$DKIM_SELECTOR" -D "$KEY_DIR" 2>>"$LOG_FILE"
-    log "DKIM keys generated with opendkim-genkey"
-  else
-    warn "opendkim-genkey not found — using openssl fallback"
-    PRIV="$KEY_DIR/$DKIM_SELECTOR.private"
-    openssl genrsa -out "$PRIV" 2048 2>>"$LOG_FILE"
-    PUB_B64=$(openssl rsa -in "$PRIV" -pubout -outform PEM 2>/dev/null | \
-              grep -v "^-" | tr -d '\n')
-    cat > "$KEY_DIR/$DKIM_SELECTOR.txt" <<DKIMTXT
-${DKIM_SELECTOR}._domainkey.${DOMAIN} IN TXT "v=DKIM1; k=rsa; p=${PUB_B64}"
-DKIMTXT
-  fi
-
-  chmod 600 "$KEY_DIR/$DKIM_SELECTOR.private"
-  chown -R opendkim:opendkim /etc/opendkim/keys
-
-  # Add to KeyTable (idempotent)
-  KT_ENTRY="${DKIM_SELECTOR}._domainkey.${DOMAIN} ${DOMAIN}:${DKIM_SELECTOR}:${KEY_DIR}/${DKIM_SELECTOR}.private"
-  if ! grep -qF "$DOMAIN" /etc/opendkim/KeyTable 2>/dev/null; then
-    echo "$KT_ENTRY" >> /etc/opendkim/KeyTable
-  fi
-
-  # Add to SigningTable (idempotent)
-  ST_ENTRY="*@${DOMAIN} ${DKIM_SELECTOR}._domainkey.${DOMAIN}"
-  if ! grep -qF "@$DOMAIN" /etc/opendkim/SigningTable 2>/dev/null; then
-    echo "$ST_ENTRY" >> /etc/opendkim/SigningTable
-  fi
-
-  success "DKIM keys ready for $DOMAIN"
-  mark_done "dkim_keys_primary"
-fi
+log "Skipping DKIM key generation — AWS SES provides DKIM tokens via API"
+log "Add AWS SES DKIM CNAME records to DNS for outgoing email signing"
 
 # ==============================================================================
 # 10. Fail2Ban — basic protection

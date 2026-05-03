@@ -10,75 +10,30 @@ export interface DkimKeyPair {
 }
 
 /**
- * DKIM key management using system openssl (always available on Linux).
- * Keys are stored in /etc/opendkim/keys/<domain>/<selector>.{private,txt}
- * OpenDKIM config files (KeyTable, SigningTable, TrustedHosts) are updated atomically.
+ * DKIM key management DISABLED - AWS SES handles DKIM signing for outgoing emails.
+ * This service is kept for backward compatibility but does nothing.
+ * AWS SES provides DKIM tokens that should be added as CNAME records in DNS.
  */
 export class DkimService {
   async generateKeys(domain: string): Promise<DkimKeyPair> {
-    const keysDir     = path.join(config.OPENDKIM_KEYS_DIR, domain);
-    const selector    = config.DKIM_SELECTOR;
-    const privatePath = path.join(keysDir, `${selector}.private`);
-    const publicPath  = path.join(keysDir, `${selector}.txt`);
-
-    await fs.mkdir(keysDir, { recursive: true });
-
-    // Generate 2048-bit RSA key pair via openssl
-    await exec(`openssl genrsa -out "${privatePath}" 2048`);
-    await exec(`chmod 600 "${privatePath}"`);
-
-    // Extract public key in PKCS#8 PEM, then convert to DNS TXT format
-    const pubPem = await exec(`openssl rsa -in "${privatePath}" -pubout -outform PEM`);
-    const dnsRecord = this.pemToDnsTxt(pubPem.stdout);
-
-    // Write DNS record file
-    const txtContent = `${selector}._domainkey.${domain} IN TXT "v=DKIM1; k=rsa; p=${dnsRecord}"`;
-    await fs.writeFile(publicPath, txtContent, 'utf8');
-
-    // Update OpenDKIM config
-    await this.updateKeyTable(domain, selector, privatePath);
-    await this.updateSigningTable(domain, selector);
-    await this.updateTrustedHosts(domain);
-
-    // Reload OpenDKIM
-    await this.reloadOpendkim();
-
-    logger.info('[DKIM] keys generated', { domain, selector });
-    return { publicKey: dnsRecord, privateKeyPath: privatePath };
+    logger.warn('[DKIM] DKIM key generation disabled - AWS SES handles DKIM signing for outgoing emails', { domain });
+    // Return empty placeholder - actual DKIM keys are managed by AWS SES
+    return { publicKey: '', privateKeyPath: '' };
   }
 
   async rotateKeys(domain: string): Promise<DkimKeyPair> {
-    logger.info('[DKIM] rotating keys', { domain });
-    // Archive old keys
-    const keysDir  = path.join(config.OPENDKIM_KEYS_DIR, domain);
-    const ts       = Date.now();
-    try {
-      await exec(`cp -r "${keysDir}" "${keysDir}.backup.${ts}"`);
-    } catch { /* non-fatal */ }
-    return this.generateKeys(domain);
+    logger.warn('[DKIM] DKIM key rotation disabled - AWS SES handles DKIM signing for outgoing emails', { domain });
+    return { publicKey: '', privateKeyPath: '' };
   }
 
   async keyExists(domain: string): Promise<boolean> {
-    const selector    = config.DKIM_SELECTOR;
-    const privatePath = path.join(config.OPENDKIM_KEYS_DIR, domain, `${selector}.private`);
-    try {
-      await fs.access(privatePath);
-      return true;
-    } catch {
-      return false;
-    }
+    // Always return false since we don't manage local DKIM keys anymore
+    return false;
   }
 
   async getPublicKeyRecord(domain: string): Promise<string | null> {
-    const selector   = config.DKIM_SELECTOR;
-    const publicPath = path.join(config.OPENDKIM_KEYS_DIR, domain, `${selector}.txt`);
-    try {
-      const content = await fs.readFile(publicPath, 'utf8');
-      const match   = content.match(/p=([A-Za-z0-9+/=]+)/);
-      return match ? match[1] : null;
-    } catch {
-      return null;
-    }
+    // Return null - AWS SES provides DKIM tokens via API
+    return null;
   }
 
   // ── Private helpers ───────────────────────────────────────────────────────
