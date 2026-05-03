@@ -917,6 +917,7 @@ if ! skip_if_done "nginx_configured"; then
   # Get SSL certificate for virus-scanner subdomain
   VIRUS_HOST="virus-scanner.apexcloudconsole.com"
   CERT_DIR="/etc/letsencrypt/live/$VIRUS_HOST"
+  SKIP_SSL=false
 
   if [ ! -d "$CERT_DIR" ]; then
     log "Requesting Let's Encrypt certificate for $VIRUS_HOST…"
