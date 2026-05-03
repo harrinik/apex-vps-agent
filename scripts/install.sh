@@ -831,8 +831,8 @@ clamav {
 AV
   strip_crlf /etc/rspamd/antivirus.conf
 
-  # Add rspamd user to clamav group
-  usermod -aG clamav rspamd 2>>"$LOG_FILE"
+  # Add rspamd user to clamav group (may fail if user doesn't exist yet, that's OK)
+  usermod -aG clamav rspamd 2>>"$LOG_FILE" || true
 
   svc_start rspamd
   svc_enable rspamd
