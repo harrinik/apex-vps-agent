@@ -64,6 +64,26 @@ retry() {
 }
 
 # ── Service control with verification ────────────────────────────────────────
+svc_stop() {
+  local svc="$1"
+  log "Stopping $svc…"
+  systemctl stop "$svc" 2>>"$LOG_FILE" || true
+}
+
+svc_start() {
+  local svc="$1"
+  log "Starting $svc…"
+  systemctl start "$svc" 2>>"$LOG_FILE" || {
+    warn "$svc failed to start — check: journalctl -u $svc -n 50"
+  }
+  sleep 1
+  if systemctl is-active --quiet "$svc"; then
+    success "$svc is running"
+  else
+    warn "$svc may not be running — check: journalctl -u $svc -n 50"
+  fi
+}
+
 svc_restart() {
   local svc="$1"
   log "Restarting $svc…"
