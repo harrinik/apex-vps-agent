@@ -9,7 +9,7 @@ export function createInboundRouter(): Router {
   router.post('/', async (req: Request, res: Response) => {
     try {
       const supabaseUrl = process.env.SUPABASE_URL;
-      const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY_KEY;
+      const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY;
 
       if (!supabaseUrl || !supabaseKey) {
         logger.error('[Inbound] Missing Supabase credentials in vps-agent environment');
