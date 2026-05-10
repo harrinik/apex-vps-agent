@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env bash
+#!/usr/bin/env bash
 # ==============================================================================
 #  Apex Mail Cloud — Full Stack Installer v2
 #  Installs + configures: Postfix, Dovecot, OpenDKIM, UFW, Node.js, PM2,
@@ -428,6 +428,11 @@ virtual_uid_maps        = static:5000
 virtual_gid_maps        = static:5000
 virtual_transport       = lmtp:unix:private/dovecot-lmtp
 
+# ── Webhook Forwarder ─────────────────────────────────────────────────────────
+# Sends a copy of all emails to the vps-agent for Supabase DB insertion
+always_bcc = webhook@localhost
+transport_maps = hash:/etc/postfix/transport
+
 # ── DKIM (AWS SES handles DKIM for outgoing emails) ─────────────────────────
 # No OpenDKIM milter needed - AWS SES signs outgoing emails
 # VPS only handles incoming mail reception
@@ -498,8 +503,26 @@ smtps inet  n       -       y       -       -       smtpd
   -o smtpd_sasl_auth_enable=yes
   -o smtpd_recipient_restrictions=permit_sasl_authenticated,reject
   -o milter_macro_daemon_name=ORIGINATING
+
+apex-webhook unix - n n - - pipe
+  flags=Fq user=vmail argv=/usr/local/bin/apex-inbound.sh
 MSTEOF
   fi
+
+  # Create apex-inbound webhook forwarder script
+  cat > /usr/local/bin/apex-inbound.sh <<'APEXWEBHOOK'
+#!/bin/bash
+# Forwards raw email from Postfix directly to vps-agent local API
+curl -s -X POST http://127.0.0.1:3001/api/internal/inbound \
+     -H "Content-Type: message/rfc822" \
+     --data-binary @- > /dev/null
+APEXWEBHOOK
+  chmod +x /usr/local/bin/apex-inbound.sh
+  chown vmail:vmail /usr/local/bin/apex-inbound.sh
+
+  # Configure transport map for the webhook
+  echo "webhook@localhost apex-webhook:" > /etc/postfix/transport
+  postmap /etc/postfix/transport 2>>"$LOG_FILE" || true
 
   # Create virtual mailbox files
   touch /etc/postfix/vdomains /etc/postfix/vmailbox /etc/postfix/virtual
